@@ -1,1 +1,16 @@
 heheheha :skull: :skull:
+
+```{python}
+for i in range(100):
+  print("#" * i)
+  
+def even_odd(num):
+  if num == 1:
+    return "odd"
+  elif num == 2:
+    return "even"
+  elif num == 3:
+    return "odd"
+  elif num == 4:
+    return "even"
+```
