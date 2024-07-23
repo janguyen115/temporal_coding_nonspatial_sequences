@@ -1,0 +1,72 @@
+---
+title: "glmm"
+output: html_document
+date: "2024-07-22"
+---
+
+```{r}
+library(glmmTMB)
+library(tidyverse)
+```
+
+```{r}
+rm(list = ls())
+load("../RData/prediction_combined_all_rats_new2.RData")
+```
+
+```{r}
+rats <- list(Barat, Buchanan, Mitt, Stella, SuperChris)
+rat_names <- c("Barat", "Buchanan", "Mitt", "Stella", "SuperChris")
+
+rats_long <- list(5)
+
+for (i in 1:5) {
+  rat_long <- rats[[i]] |>
+    pivot_longer(
+      starts_with("S", ignore.case = FALSE),
+      names_to = "state",
+      values_to = "prob"
+    ) |>
+    select(-seq_id)
+  
+  rat_long$state <- as.factor(gsub("S", "", rat_long$state))
+  rat_long$rat <- as.factor(rat_names[i])
+  rat_long$y <- as.factor(rat_long$y)
+  
+  rat_long <- rat_long |>
+    rename(ITI_type = y) |>
+    group_by(rat, state, group, ITI_type)
+  
+  rats_long[[i]] <- rat_long
+}
+
+rats_long <- bind_rows(rats_long)
+rats_long
+```
+
+```{r}
+rats_long <- rats_long |>
+  mutate(prob = ifelse(prob == 0, 0.0001, ifelse(prob == 1, 0.9999, prob)))
+
+rats_long_y3 <- rats_long |>
+  filter(ITI_type == 3)
+
+nrow(rats_long)
+nrow(rats_long_y3)
+```
+
+```{r}
+# nt <- parallel::detectCores()
+nt <- 6 # Change this based on your computer's capabilities
+
+# Use beta distribution
+prob_model <- glmmTMB(
+  prob ~ time + (1 + group | rat),
+  rats_long_y3,
+  beta_family(),
+  control = glmmTMBControl(parallel = nt)
+)
+
+save(prob_model, file = "../RData/prob_model_y3.RData")
+prob_model
+```

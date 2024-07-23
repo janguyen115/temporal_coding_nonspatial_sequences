@@ -1,0 +1,23 @@
+---
+title: "box_plot"
+date: "2024-07-17"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+rm(list = ls())
+load("../RData/TimeLag_EnsembleMat_predictions.RData")
+```
+
+```{r}
+ypred <- TimeLag_EnsembleMat_predicted$Barat$ypred
+```
+
+```{r}
+ggplot(mapping = aes(x = ypred[, 1, ])) +
+  geom_boxplot()
+```

@@ -1,0 +1,314 @@
+---
+title: "data_cleaning"
+date: "2024-07-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+rm(list = ls())
+load("../RData/behavior_data.RData")
+```
+
+```{r}
+is_new_sequence <- function(row) {
+  row$Odor1 == 1 & row$InSeqLog == 1
+}
+
+initialize_new_row <- function(row, seq_id, poketime) {
+  list(
+    seq_id = seq_id,  
+    Odor1 = row$TimeBin,
+    InSeqTot = 1,
+    Success = 1,
+    Poke_Odor1 = poketime,
+    Withdraw_Odor1 = NA,
+    Odor2 = NA,
+    Odor3 = NA,
+    Odor4 = NA,
+    Odor5 = NA,
+    InSeq_Odor1 = 1,
+    InSeq_Odor2 = 0,
+    InSeq_Odor3 = 0,
+    InSeq_Odor4 = 0,
+    InSeq_Odor5 = 0,
+    Poke_Odor2 = NA,
+    Poke_Odor3 = NA,
+    Poke_Odor4 = NA,
+    Poke_Odor5 = NA,
+    Withdraw_Odor2 = NA,
+    Withdraw_Odor3 = NA,
+    Withdraw_Odor4 = NA,
+    Withdraw_Odor5 = NA,
+    PerformanceLog_Odor1 = 1,
+    PerformanceLog_Odor2 = 1,
+    PerformanceLog_Odor3 = 1,
+    PerformanceLog_Odor4 = 1,
+    PerformanceLog_Odor5 = 1,
+    trial_id_Odor1 = NA,
+    trial_id_Odor2 = NA,
+    trial_id_Odor3 = NA,
+    trial_id_Odor4 = NA,
+    trial_id_Odor5 = NA
+  )
+}
+
+initialize_odor <- function(new_row, j) {
+  new_row[[paste0("Odor", j)]] <- NA
+  new_row[[paste0("InSeq_Odor", j)]] <- NA
+  new_row[[paste0("Poke_Odor", j)]] <- NA
+  new_row[[paste0("Withdraw_Odor", j)]] <- NA
+  new_row[[paste0("PerformanceLog_Odor", j)]] <- NA
+  new_row
+}
+
+update_poketime <- function(row, poketime) {
+  ifelse(row$PokeEvents == 1, row$TimeBin, poketime)
+}
+
+update_withdrawtime <- function(row, withdrawtime) {
+  ifelse(row$PokeEvents == -1, row$TimeBin, withdrawtime)
+}
+
+fill_odor <- function(table, row, j, poketime) {
+  table[[length(table)]][[paste0("Odor", j)]] <- row$TimeBin
+  table[[length(table)]][[paste0("Poke_Odor", j)]] <- poketime
+  table[[length(table)]][[paste0("InSeq_Odor", j)]] <- row$InSeqLog
+  if (row$PerformanceLog == -1) {
+    table[[length(table)]][[paste0("PerformanceLog_Odor", j)]] <- -1 
+  }
+  if (row$PerformanceLog == 1) {
+    table[[length(table)]][[paste0("PerformanceLog_Odor", j)]] <- 1 
+  }
+  table
+}
+
+should_fill <- function(row, j, count) {
+  row[paste0("Position", j)] == 1 & count == j
+}
+
+is_not_empty <- function(table) {
+  length(table) > 0
+}
+
+reassign_na_if_invalid_sequence <- function(table, i) {
+  for (j in 2:4) {
+    performance_j <- table[[i]][[paste0("PerformanceLog_Odor", j)]]
+    if ((!is.na(performance_j) & performance_j == -1) | is.na(performance_j)) {
+      for (k in (j + 1):5) {
+        table[[i]][[paste0("Odor", k)]] <- NA
+        table[[i]][[paste0("PerformanceLog_Odor", k)]] <- NA
+      }
+      break
+    }
+  }
+  for (j in 2:5) {
+    performance_j <- table[[i]][[paste0("PerformanceLog_Odor", j)]]
+    performance_i <- table[[i]][[paste0("PerformanceLog_Odor", j - 1)]]
+    inseq_j <- table[[i]][[paste0("InSeq_Odor", j)]]
+    if (!is.na(performance_j) & performance_j == 1 & inseq_j == -1) {
+      table[[i]][[paste0("Odor", j)]] <- NA
+      table[[i]][[paste0("Poke_Odor", j)]] <- NA
+      table[[i]][[paste0("Withdraw_Odor", j)]] <- NA
+    }
+    if (is.na(performance_j)) {
+      table[[i]][[paste0("Poke_Odor", j)]] <- NA
+      table[[i]][[paste0("Withdraw_Odor", j)]] <- NA
+    }
+    if ((!is.na(performance_i) & performance_i == -1) | is.na(performance_i)) {
+      table[[i]][[paste0("Odor", j)]] <- NA
+      table[[i]][[paste0("PerformanceLog_Odor", j)]] <- NA
+      table[[i]][[paste0("Poke_Odor", j)]] <- NA
+      table[[i]][[paste0("Withdraw_Odor", j)]] <- NA
+    }
+  }
+
+  table
+}
+
+reordered_df <- function(df) {
+  ordered <- c(
+    "Odor1",
+    "Odor2",
+    "Odor3",
+    "Odor4",
+    "Odor5", 
+    "seq_id",
+    "PerformanceLog_Odor1",
+    "PerformanceLog_Odor2",
+    "PerformanceLog_Odor3",
+    "PerformanceLog_Odor4",
+    "PerformanceLog_Odor5",
+    "InSeq_Odor1",
+    "InSeq_Odor2",
+    "InSeq_Odor3",
+    "InSeq_Odor4",
+    "InSeq_Odor5",
+    "InSeqTot",
+    "Poke_Odor1",
+    "Poke_Odor2",
+    "Poke_Odor3",
+    "Poke_Odor4",
+    "Poke_Odor5", 
+    "Withdraw_Odor1",
+    "Withdraw_Odor2",
+    "Withdraw_Odor3",
+    "Withdraw_Odor4",
+    "Withdraw_Odor5",
+    "trial_id_Odor1",
+    "trial_id_Odor2",
+    "trial_id_Odor3",
+    "trial_id_Odor4",
+    "trial_id_Odor5"
+  )
+  df <- df[, ordered]
+}
+
+incorrect_rows <- function(new_df, example) {
+  # Specify the columns to compare
+  cols_new_df_1 <- 1:11
+  cols_new_df_2 <- 18:27
+  cols_new_df_3 <- 28:32
+  cols_example_1 <- 1:11
+  cols_example_2 <- 17:26
+  cols_example_3 <- 12:16
+
+  # Combine the columns indices
+  cols_new_df <- c(cols_new_df_1, cols_new_df_2, cols_new_df_3)
+  cols_example <- c(cols_example_1, cols_example_2, cols_example_3)
+  
+  # Create a logical matrix for comparisons, treating NAs correctly
+  comparison <- !is.na(new_df[, cols_new_df]) &
+    !is.na(example[, cols_example]) &
+    new_df[, cols_new_df] != example[, cols_example]
+  
+  # Handle rows where all values are NA in both data frames
+  all_na <- is.na(new_df[, cols_new_df]) & is.na(example[, cols_example])
+  
+  # Find rows where any comparison is TRUE,
+  # excluding rows where all values are NA in both
+  unequal_rows <- apply(
+    comparison |
+      (
+        !is.na(new_df[, cols_new_df]) & is.na(example[, cols_example]) |
+          is.na(new_df[, cols_new_df]) & !is.na(example[, cols_example])
+      ),
+    1, any
+  ) & !apply(all_na, 1, all)
+  
+  # Subset new_df to get the rows that are not equal
+  print(new_df[unequal_rows, ])
+  print(example[unequal_rows, ])
+}
+
+```
+
+```{r}
+# Main function
+clean_data <- function(name, rat_filtered) {
+  nrows <- nrow(rat_filtered)
+  seq_id <- 1
+  table <- list()
+  poketime <- 0
+  withdrawtime <- 0
+  
+  for (i in 1:nrows) {
+    # Extract current row
+    row <- rat_filtered[i, ] 
+
+    # Only if rat pokes in during current row
+    poketime <- update_poketime(row, poketime)
+
+    # Only if rat withdraws during current row
+    withdrawtime <- update_withdrawtime(row, withdrawtime)
+  
+    if (is_new_sequence(row)) {
+      new_row <- initialize_new_row(row, seq_id, poketime)
+      for (j in 2:5) {
+        new_row <- initialize_odor(new_row, j)
+      }
+      table <- append(table, list(new_row))
+      seq_id <- seq_id + 1  
+      count <- 1
+    }
+    
+    if (is_not_empty(table)) {
+      for (j in 1:5) {
+        if (should_fill(row, j, count)) {
+          table <- fill_odor(table, row, j, poketime)
+        }
+
+        # Update Trial ID
+        if (row[[paste0("Position", j)]] != 0 && count == j) {
+          table[[length(table)]][[paste0("trial_id_Odor", j)]] <- row$trial_id
+          if (is.na(row$trial_id)) {
+            table[[length(table)]][[paste0("trial_id_Odor", j)]] <- table[[
+              length(table)]][[paste0("trial_id_Odor", j - 1)
+            ]] + 1
+          }
+        }
+      }
+      if (row$PokeEvents == -1) {
+        if (count <= 5) {
+          table[[
+            length(table)]][[paste0("Withdraw_Odor", count)
+          ]] <- withdrawtime
+        }
+        count <- count + 1
+      }
+    }
+  }
+
+  nrows <- length(table)
+  for (i in 1:nrows) {
+    table <- reassign_na_if_invalid_sequence(table, i)
+
+    in_seq_tot <- 1
+    for (j in 1:5) {
+      if (
+        !is.na(table[[i]][[paste0("InSeq_Odor", j)]]) &&
+        table[[i]][[paste0("InSeq_Odor", j)]] == -1
+      ) {
+        in_seq_tot <- -1
+      }
+    }
+    table[[i]]$InSeqTot <- in_seq_tot
+  }
+  
+  new_df <- do.call(rbind, lapply(table, as.data.frame)) 
+  new_df <- reordered_df(new_df)
+}
+```
+
+```{r}
+# Initialize lists to store data frames
+name_list <- c("Barat", "Buchanan", "Mitt", "Stella", "SuperChris")
+be_data_clean <- list()
+example_data <- list()
+
+# Populate be_data_clean and example_data with respective data
+for (name in name_list) {
+  # Access and store clean data
+  data <- be_data[[name]]$BehavMatrix
+  
+  if (!is.null(data) && ncol(data) >= 16) {
+    rat_filtered <- data[apply(data[, 2:16], 1, function(row) any(row != 0)), ]
+    be_data_clean[[name]] <- clean_data(name, rat_filtered)
+  } else {
+    print(paste("Data for", name, "is not properly formatted or empty."))
+    next
+  }
+  
+  # Access and store example data
+  example_data[[name]] <- be_data[[name]]$All_Odor_Mat
+}
+
+# Loop over name_list and print incorrect rows for each pair of data frames
+for (name in name_list) {
+  incorrect_rows(be_data_clean[[name]], example_data[[name]])
+}
+```
+
+```{r}
+save(be_data_clean, file = "../RData/behavior_data_clean.RData")
+```

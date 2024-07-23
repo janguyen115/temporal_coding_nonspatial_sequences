@@ -1,0 +1,169 @@
+---
+title: "multinomial_regression"
+date: "2024-07-08"
+output: html_document
+---
+
+```{r}
+library(glmnet)
+library(caret)
+library(doMC)  # install.packages("doMC", repos="http://R-Forge.R-project.org")
+library(tidyverse)
+```
+
+```{r}
+registerDoMC(cores = 4)
+set.seed(123)  # For reproducibility
+```
+
+```{r}
+rm(list = ls())
+load("../RData/TimeLag_EnsembleMat_raw.RData")
+load("../RData/behavior_data_clean.RData")
+```
+
+```{r}
+for (i in 1:5) {
+  TimeLag_EnsembleMat[[i]]$test_data <- TimeLag_EnsembleMat[[i]]$test_data |>
+    filter(y <= 4)
+}
+```
+
+```{r}
+# Add group labels to test_data
+label_groups_test <- function(rat_num) {
+  test_timelag <- TimeLag_EnsembleMat[[rat_num]]$test_data
+  odor_mat <- be_data_clean[[rat_num]]
+  
+  # Group 1: intervals of full sequences only
+  group1_filter <- logical(nrow(test_timelag))
+
+  # Group 2: intervals before first wrong odor in out of sequence sequences
+  group2_filter <- logical(nrow(test_timelag))
+
+  # Group 3: intervals after first wrong odor in out of sequence sequences
+  group3_filter <- logical(nrow(test_timelag))
+  
+  for (i in seq_len(nrow(odor_mat))) {
+    cat(
+      "Processing odor mat row",
+      i,
+      "of",
+      nrow(odor_mat),
+      "for rat",
+      rat_num,
+      "\r"
+    )
+    
+    odor_mat_row <- odor_mat[i, ]
+    
+    if (odor_mat_row$InSeqTot == 1) {
+      group1_filter <- group1_filter |
+        test_timelag$seq_id == odor_mat_row$seq_id
+      next
+    }
+    
+    for (j in seq_len(5)) {
+      if (odor_mat_row[[paste0("InSeq_Odor", j)]] == -1) {
+        if (is.na(odor_mat_row[[paste0("Odor", j)]])) {
+          group2_filter <- group2_filter | (
+            test_timelag$seq_id == odor_mat_row$seq_id &
+              odor_mat_row[[paste0("Withdraw_Odor", j - 1)]] >=
+              test_timelag$time_window_start
+          )
+        } else {
+          group2_filter <- group2_filter | (
+            test_timelag$seq_id == odor_mat_row$seq_id &
+              odor_mat_row[[paste0("Odor", j)]] >=
+              test_timelag$time_window_start
+          )
+        }
+        
+        break
+      }
+    }
+  }
+  
+  group3_filter <- !group2_filter & !group1_filter
+  
+  group1 <- test_timelag[group1_filter, ]
+  group2 <- test_timelag[group2_filter, ]
+  group3 <- test_timelag[group3_filter, ]
+  
+  # print(group1)
+  # print(group2)
+  # print(group3)
+  
+  grouped_timelag <- bind_rows(
+    group1 |> mutate(group = 1),
+    group2 |> mutate(group = 2),
+    group3 |> mutate(group = 3)
+  )
+  
+  grouped_timelag <- grouped_timelag |>
+    select(group, everything()) |>  # Make group first column
+    arrange(time_window_start)
+}
+```
+
+```{r}
+for (i in 1:5) {
+  TimeLag_EnsembleMat[[i]]$test_data <- label_groups_test(i)
+}
+```
+
+```{r}
+# Fit multinomial regression
+# Too slow to put into a loop, run individually
+for (i in 1:5) {
+  # Read train and test data
+  traindata <- TimeLag_EnsembleMat[[i]]$train_data
+  testdata <- TimeLag_EnsembleMat[[i]]$test_data
+  xtrain <- as.matrix(traindata[, -c(1:5)])
+  ytrain <- traindata$y
+  
+  xtest <- as.matrix(testdata[, -c(1:6)])
+  
+  # # Check for mismatch
+  # print(ncol(xtrain))
+  # print(ncol(xtest))
+  # stopifnot(ncol(xtrain) == ncol(xtest))
+  
+  # # stratification
+  # 
+  # folds <- createFolds(ytrain, k = 10, list = TRUE, returnTrain = TRUE)
+  # 
+  # # Convert the list of folds into a vector for `cv.glmnet`
+  # foldids <- rep(NA, length(ytrain))
+  # for (i in seq_along(folds)) {
+  #   foldids[folds[[i]]] <- i
+  # }
+  
+  cvfit <- cv.glmnet(
+    xtrain,
+    ytrain,
+    standardize = T,
+    intercept = T,  # include intercept in coef
+    family = "multinomial",
+    trace.it = T,
+    type.measure = "class",
+    parallel = TRUE,
+    nfolds = 10,
+    type.multinomial = "ungrouped"
+  )  # maxit=5e4)
+
+  # Predict probability for each class new with lowest lambda
+  ypred <- predict(cvfit, newx = xtest, s = "lambda.min", type = "response")
+  
+  TimeLag_EnsembleMat[[i]]$ypred <- ypred
+  print(apply(ypred, 2, summary))
+  print(paste("Finished regression for rat", i))
+}
+```
+
+```{r}
+TimeLag_EnsembleMat_predicted <- TimeLag_EnsembleMat
+save(TimeLag_EnsembleMat_predicted,
+  file = "../RData/TimeLag_EnsembleMat_predictions.RData"
+)
+```

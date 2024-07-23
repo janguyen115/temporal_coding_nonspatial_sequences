@@ -1,0 +1,467 @@
+---
+title: "psth_task1"
+author: "James A. Nguyen"
+date: "2024-07-12"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(zoo)
+rm(list = ls())
+print(getwd())
+load("../RData/TimeLag_EnsembleMat.RData")
+load("../RData/behavior_data_clean.RData")
+load("../Rdata/TimeLag_EnsembleMat_predictions.RData")
+```
+
+```{r}
+rats <- c("Barat", "Buchanan", "Mitt", "Stella", "SuperChris")
+odor_cells_list <- list()
+get_baseline <- function (null_period) {
+  colSums(null_period[6:ncol(null_period)]) / nrow(null_period) # sum of activations / total time
+}
+
+for (rat in rats) {
+  behav_data <- be_data_clean[[rat]]
+
+  # REDEFINE ODOR LIST FOR ALL TRAIN DATA
+  odor_ids_list <- list()
+  
+  # Iterate over the range 1 to 5
+  for (i in 1:5) {
+    # Dynamically create the name for the list element
+    list_name <- paste0("Odor", i, "_ids")
+    
+    # Assign the corresponding values to the list element
+    odor_ids_list[[list_name]] <- behav_data[[paste0("trial_id_Odor", i)]][!is.na(behav_data[[paste0("trial_id_Odor", i)]])]
+  }
+  
+  rat_data <- TimeLag_EnsembleMat_predicted[[rat]]$train_data
+  null_period <- rat_data[rat_data$y == 6,]
+  baseline <- get_baseline(null_period)
+  firing_rates_list <- list()
+  
+  for (odor in 1:5) { 
+    firing_rates <- 0 # initialize for each new odor
+    skip <- 0
+    for (id in odor_ids_list[[odor]]) {
+      id_subset <- rat_data[rat_data$trial_id == id & rat_data$y != 6, ] # extract timelag data for each trial id
+      if (nrow(id_subset) == 0) {
+        skip <- skip + 1
+        next # skip if there is no data for the given trial_id
+      }
+      fire_sum <- colSums(id_subset[6:ncol(id_subset)]) / nrow(id_subset) # sum the columns of each neuron
+      firing_rates <- firing_rates + fire_sum # add average firing rate to cumulative
+    }
+    firing_rates <- firing_rates / ( length(odor_ids_list[[odor]]) - skip )# divide by number of trials per odor, apply z-score
+    firing_rates_list <- append(firing_rates_list, list(firing_rates))
+  }
+  neuron_names <- colnames(rat_data)[6:ncol(rat_data)]
+  rat_odor_cells_list <- vector("list", length(neuron_names))
+  
+  for (neuron in 1:length(neuron_names)) {
+    if (any(sapply(firing_rates_list, function(x) x[neuron]) != 0)) {
+      odor_max <- which.max(sapply(firing_rates_list, function(x) x[neuron]))
+      rat_odor_cells_list[[neuron]] <- odor_max
+    }
+  }
+  
+  odor_cells <- list()
+  for (i in 1:5) {
+    odor_neurons <- neuron_names[which(unlist(rat_odor_cells_list) == i)]
+    odor_cells[[paste0("Odor", i, "_cells")]] <- odor_neurons
+  }
+  odor_cells_list[[rat]] <- odor_cells
+}
+
+odor_cells_list
+```
+
+```{r}
+### Define Functions
+get_odor_ids_list <- function(rat, behav_data) {
+  odor_ids_list <- list()
+  
+  # Iterate over the range 1 to 5
+  for (i in 1:5) {
+    # Dynamically create the name for the list element
+    list_name <- paste0("Odor", i, "_ids")
+    
+    # Assign the corresponding values to the list element
+    odor_ids_list[[list_name]] <- behav_data[[paste0("trial_id_Odor", i)]][!is.na(behav_data[[paste0("trial_id_Odor", i)]]) & behav_data$InSeqTot == 1]
+  }
+  odor_ids_list
+}
+
+normalize_time_window <- function(trial, id, numbins = 50) { ### For each odorA[inseqtot == 1] offline sequence, normalize start time to 0, end time to 1.25
+  start_times <- trial$time_window_start
+  start_time <- start_times[1]
+  start_times_norm <- (start_times - start_time)
+  end_time <- start_times_norm[length(start_times_norm)]
+  start_times_norm <- (start_times_norm / end_time) ### standardize times
+  bins <- seq(0, 1, length.out = numbins)
+  values <- trial[6:ncol(trial)]
+  new_values <- apply(values, 2, function(col) {
+    # Ensure we interpolate over the entire range
+    na.approx(col, x = start_times_norm, xout = bins, na.rm = FALSE) # Uses curve fitting to approximate the function of neural activations, then takes "y-value" each 1/1000 of the curve; TLDR reduces 3800 ish rows to 1000
+  })
+  new_values
+}
+
+get_baseline <- function (null_period) {
+  colSums(null_period[6:ncol(null_period)]) / nrow(null_period) # sum of activations / total time
+}
+```
+
+
+```{r}
+rats <- c("Barat", "Buchanan", "Mitt", "Stella", "SuperChris")
+data <- data.frame()
+for (rat in rats) {
+  trials_list <- list()
+  behav_data <- be_data_clean[[rat]]
+  timelag_data <- TimeLag_EnsembleMat[[rat]]$test_data 
+  odor_ids_list <- get_odor_ids_list(rat, behav_data)
+  combined_trials <- matrix(0, nrow = 50, ncol = ncol(timelag_data) - 5) 
+  
+  rat_data <- TimeLag_EnsembleMat_predicted[[rat]]$train_data
+  null_period <- rat_data[rat_data$y == 6,]
+  baseline <- get_baseline(null_period)
+  # Loop through each trial_id in odor_ids_list and sum the normalized values
+  for (id in odor_ids_list[[1]]) {
+    trial <- timelag_data[timelag_data[["trial_id"]] == id,]
+    if (nrow(trial) > 0) {
+      normalized_values <- normalize_time_window(trial, id, 50) # Normalize to [o,1.25] interval, 1000 rows per trial
+      combined_trials <- combined_trials + normalized_values # Sum i^th row of each eligible trial
+    }
+  }
+  # Create the new dataframe with interpolated values
+  interpolated_data <- data.frame(time = seq(0, 1, length.out = 50), combined_trials)
+  colnames(interpolated_data)[-1] <- colnames(timelag_data)[6:ncol(timelag_data)]
+  if (nrow(data) > 0) {
+    data <- cbind(data, interpolated_data[,-1])
+  } else {
+    data <- interpolated_data
+  }
+}
+
+med_peak_fire_times <- list()
+for (neuron in 2:ncol(data)) {
+  peak_fire <- median(data$time[data[[neuron]] == max(data[,neuron])])
+  med_peak_fire_times <- append(med_peak_fire_times, peak_fire)
+}
+neurons <- colnames(data[2:ncol(data)])
+med_peak_fire_times <- unlist(med_peak_fire_times)
+
+neuron_data <- data.frame(neuron = neurons, med_peak_fire_time = med_peak_fire_times)
+neuron_data_sorted <- neuron_data[order(neuron_data$med_peak_fire_time), ]
+sorted_neurons <- neuron_data_sorted$neuron
+colnames(data) <- c("time", neuron_data$neuron)
+data_reordered <- data[, c("time", sorted_neurons)]
+#print(data_reordered)
+
+for (i in 2:ncol(data_reordered)) {
+  data_reordered[[i]] <- data_reordered[[i]] / max(data_reordered[[i]])
+}
+standardized_data <- data_reordered
+standardized_data <- standardized_data[, !apply(is.na(standardized_data), 2, all)] ### Drop "Inactive_Neuron" Columns
+
+# Melt the data into long format for ggplot
+melted_data <- pivot_longer(standardized_data, cols = -time, names_to = "neuron", values_to = "activity")
+
+# Sort neurons according to your sorted_neurons order
+melted_data$neuron <- factor(melted_data$neuron, levels = sorted_neurons)
+
+# Plot using ggplot
+ggplot(melted_data, aes(x = time, y = reorder(neuron, -as.numeric(factor(neuron))), fill = activity)) +
+  geom_tile() +
+  scale_fill_gradientn(colors = scales::viridis_pal()(10), na.value = "grey") +
+  labs(title = "Peristimulus Time Histogram - Group1_OdorA_Offline",
+       x = "Percentage of Offline Period Elapsed",
+       y = "Neurons Sorted by Median Time of Peak Activation",
+       fill = "Normalized Firing Rate") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank())  # Remove y-axis ticks) +
+  scale_x_continuous(breaks = seq(0, max(melted_data$time), by = 0.25),)
+```
+
+```{r}
+for (i in 1:5) {
+  # Combine all neurons from odor_cells_list into a single vector
+  neurons <- list()
+  for (rat in rats) {
+    neurons <- append(neurons, unique(unlist(odor_cells_list[[rat]][[paste0("Odor", i, "_cells")]])))
+  }
+
+  # Melt the data into long format for ggplot
+  melted_data <- pivot_longer(standardized_data, cols = -time, names_to = "neuron", values_to = "activity")
+  
+  # Filter melted_data to include only neurons in odor_cells_list$Barat$Odor1_cells
+  melted_data <- melted_data %>% filter(neuron %in% neurons)
+  
+  # Sort neurons according to your sorted_neurons order
+  melted_data$neuron <- factor(melted_data$neuron, levels = sorted_neurons)
+  
+  # Plot using ggplot
+  p <- ggplot(melted_data, aes(x = time, y = reorder(neuron, -as.numeric(factor(neuron))), fill = activity)) +
+        geom_tile() +
+        scale_fill_gradientn(colors = scales::viridis_pal()(10), na.value = "grey") +
+        labs(title = paste0("Peristimulus Time Histogram - Odor", i, "Neurons"),
+             x = "Percentage of Offline Period Elapsed",
+             y = "Neurons Sorted by Median Time of Peak Activation",
+             fill = "Normalized Firing Rate") +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1),
+              axis.text.y = element_blank(),
+              axis.ticks.y = element_blank()) +
+        scale_x_continuous(breaks = seq(0, max(melted_data$time), by = 0.25))
+  print(p)
+}
+
+```
+
+
+```{r}
+get_odor_ids_list <- function(rat, behav_data, seq_ids_list) { ### redefined for only complete group 1 sequences
+  odor_ids_list <- list()
+  
+  # Iterate over the range 1 to 5
+  for (i in 1:5) {
+    # Dynamically create the name for the list element
+    list_name <- paste0("Odor", i, "_ids")
+    
+    # Assign the corresponding values to the list element
+    odor_ids_list[[list_name]] <- behav_data[[paste0("trial_id_Odor", i)]][!is.na(behav_data[[paste0("trial_id_Odor", i)]]) & behav_data$InSeqTot == 1 & behav_data$seq_id %in% seq_ids_list]
+  }
+  odor_ids_list
+}
+
+normalize_time_window <- function(timelag_data, seq, numbins = 50) { ### For each odorA[inseqtot == 1] offline sequence, normalize start time to 0, end time to 1.25
+  trial <- timelag_data[timelag_data[["seq_id"]] == seq,]
+  start_times <- trial$time_window_start
+  start_time <- start_times[1]
+  start_times_norm <- (start_times - start_time)
+  end_time <- start_times_norm[length(start_times_norm)]
+  start_times_norm <- (start_times_norm / end_time) * 4 ### standardize times
+  bins <- seq(0, 4, length.out = numbins)
+  values <- trial[6:ncol(trial)]
+  new_values <- apply(values, 2, function(col) {
+    # Ensure we interpolate over the entire range
+    na.approx(col, x = start_times_norm, xout = bins, na.rm = FALSE) # Uses curve fitting to approximate the function of neural activations, then takes "y-value" each 1/1000 of the curve; TLDR reduces 3800 ish rows to 1000
+  })
+  new_values
+}
+```
+
+```{r}
+# Initialize variables
+rats <- c("Barat", "Buchanan", "Mitt", "Stella", "SuperChris")
+data <- data.frame()
+
+# Process data for each rat
+for (rat_index in seq_along(rats)) {
+  rat <- rats[rat_index]
+  behav_data <- be_data_clean[[rat]]
+  timelag_data <- TimeLag_EnsembleMat[[rat]]$test_data 
+  seq_ids_list <- behav_data[behav_data$InSeqTot == 1 & !is.na(behav_data$Odor5),]$seq_id
+  odor_ids_list <- get_odor_ids_list(rat, behav_data, seq_ids_list)
+  combined_trials <- matrix(0, nrow = 50, ncol = ncol(timelag_data) - 5) 
+  
+  for (seq in seq_ids_list) {
+    trial <- timelag_data[timelag_data[["seq_id"]] == seq,]
+    if (nrow(trial) > 0) {
+      normalized_values <- normalize_time_window(timelag_data, seq, 50)
+      combined_trials <- combined_trials + normalized_values
+    }
+  }
+  
+  interpolated_data <- data.frame(time = seq(0, 1, length.out = 50), combined_trials)
+  colnames(interpolated_data)[-1] <- paste0(colnames(timelag_data)[6:ncol(timelag_data)], ".", rat_index)
+  if (nrow(data) > 0) {
+    data <- cbind(data, interpolated_data[,-1])
+  } else {
+    data <- interpolated_data
+  }
+}
+
+# Calculate median peak firing times
+med_peak_fire_times <- list()
+for (neuron in 2:ncol(data)) {
+  peak_fire <- median(data$time[data[[neuron]] == max(data[,neuron])])
+  med_peak_fire_times <- append(med_peak_fire_times, peak_fire)
+}
+neurons <- colnames(data[2:ncol(data)])
+med_peak_fire_times <- unlist(med_peak_fire_times)
+
+neuron_data <- data.frame(neuron = neurons, med_peak_fire_time = med_peak_fire_times)
+neuron_data_sorted <- neuron_data[order(neuron_data$med_peak_fire_time), ]
+sorted_neurons <- neuron_data_sorted$neuron
+colnames(data) <- c("time", neuron_data$neuron)
+data_reordered <- data[, c("time", sorted_neurons)]
+
+for (i in 2:ncol(data_reordered)) {
+  data_reordered[[i]] <- data_reordered[[i]] / max(data_reordered[[i]])
+}
+standardized_data2 <- data_reordered
+standardized_data2 <- standardized_data2[, !apply(is.na(standardized_data2), 2, all)]
+
+# Melt the data for ggplot
+melted_data <- pivot_longer(standardized_data2, cols = -time, names_to = "neuron", values_to = "activity")
+melted_data$neuron <- factor(melted_data$neuron, levels = sorted_neurons)
+
+# Plot using ggplot
+ggplot(melted_data, aes(x = time, y = reorder(neuron, -as.numeric(factor(neuron))), fill = activity)) +
+  geom_tile() +
+  scale_fill_gradientn(colors = scales::viridis_pal()(10), na.value = "grey") +
+  labs(title = "Peristimulus Time Histogram - Group1_OdorA_Offline",
+       x = "Percentage of Offline Period Elapsed",
+       y = "Neurons Sorted by Median Time of Peak Activation",
+       fill = "Normalized Firing Rate") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank()) +
+  scale_x_continuous(breaks = seq(0, max(melted_data$time), by = 0.25))
+
+```
+
+
+
+
+
+
+
+
+
+```{r}
+if (!requireNamespace("pbapply", quietly = TRUE)) {
+  install.packages("pbapply")
+}
+
+# Load required libraries
+library(glmnet)
+library(caret)
+library(pbapply)
+
+# Train glmnet models
+neuron_f1_scores <- list()
+
+for (rat in rats) {
+  timelag_data <- TimeLag_EnsembleMat[[rat]]$train_data
+  behav_data <- be_data_clean[[rat]]
+  seq_ids_list <- behav_data[behav_data$InSeqTot == 1 & !is.na(behav_data$Odor5),]$seq_id
+  odor_ids_list <- unlist(get_odor_ids_list(rat, behav_data, seq_ids_list))
+  timelag_subset <- timelag_data[timelag_data$trial_id %in% unlist(odor_ids_list),]
+  
+  x_train <- timelag_subset[, -c(1:5)]
+  x_train <- x_train[, apply(x_train, 2, var) != 0]
+  
+  y_train <- as.factor(timelag_subset[, 3])
+  complete_cases <- complete.cases(x_train, y_train)
+  x_train <- x_train[complete_cases, ]
+  y_train <- y_train[complete_cases]
+  
+  x_train <- scale(x_train)
+  
+  f1_list <- pblapply(1:ncol(x_train), function(i_neuro) {
+    train <- cbind(rep(1, length(y_train)), x_train[, i_neuro])
+    
+    cvfit <- cv.glmnet(train, y_train, 
+                       family = "multinomial",
+                       trace.it = FALSE,
+                       type.measure = "mse",
+                       nfolds = 10,
+                       alpha = 0.5,
+                       type.multinomial = "ungrouped")
+    
+    predictions <- predict(cvfit, newx = train, s = "lambda.min", type = "class")
+    predictions <- as.factor(predictions)
+    predictions <- factor(predictions, levels = levels(y_train))
+    
+    confusion <- confusionMatrix(predictions, y_train)
+    
+    precision <- confusion$byClass[, "Precision"]
+    recall <- confusion$byClass[, "Recall"]
+    f1_scores <- 2 * (precision * recall) / (precision + recall)
+    
+    macro_f1 <- mean(f1_scores, na.rm = TRUE)
+    
+    neuron_name <- colnames(x_train)[i_neuro]
+    return(list(neuron_name = neuron_name, macro_f1 = macro_f1))
+  })
+  
+  f1_list <- setNames(sapply(f1_list, `[[`, "macro_f1"), sapply(f1_list, `[[`, "neuron_name"))
+  neuron_f1_scores[[rat]] <- f1_list
+}
+
+# Function to get top neurons per odor
+get_top_neurons_per_odor <- function(f1_scores_list, odor_labels, top_n = 12) {
+  top_neurons_per_odor <- list()
+  
+  for (odor in unique(odor_labels)) {
+    neurons_for_odor <- f1_scores_list[odor_labels == odor]
+    
+    if (length(neurons_for_odor) > 0) {
+      f1_scores_df <- data.frame(neuron = names(neurons_for_odor), f1_score = unlist(neurons_for_odor))
+      f1_scores_df <- f1_scores_df[order(-f1_scores_df$f1_score), ]
+      
+      top_neurons <- head(f1_scores_df, top_n)
+      top_neurons_per_odor[[odor]] <- top_neurons
+    }
+  }
+  
+  return(top_neurons_per_odor)
+}
+
+# Example: Generate odor labels
+odor_labels <- unlist(lapply(rats, function(rat) {
+  rep(c("Odor1", "Odor2", "Odor3", "Odor4", "Odor5"), length.out = length(neuron_f1_scores[[rat]]))
+}))
+
+combined_f1_scores <- do.call(c, neuron_f1_scores)
+top_neurons_per_odor <- get_top_neurons_per_odor(combined_f1_scores, odor_labels)
+
+for (odor in names(top_neurons_per_odor)) {
+  print(paste("Top 12 neurons for", odor, ":"))
+  print(top_neurons_per_odor[[odor]])
+}
+```
+
+
+
+```{r}
+### Unfinished Code, update naming scheme, update odor_cells_list accordingly
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+for (i in 1:5) {
+  neurons <- list()
+  for (rat in rats) {
+    neurons <- append(neurons, unique(unlist(odor_cells_list[[rat]][[paste0("Odor", i, "_cells")]])))
+  }
+
+  melted_data <- pivot_longer(standardized_data2, cols = -time, names_to = "neuron", values_to = "activity")
+  melted_data <- melted_data %>% filter(neuron %in% neurons)
+  melted_data$neuron <- factor(melted_data$neuron, levels = sorted_neurons)
+  
+  p <- ggplot(melted_data, aes(x = time, y = reorder(neuron, -as.numeric(factor(neuron))), fill = activity)) +
+        geom_tile() +
+        scale_fill_gradientn(colors = scales::viridis_pal()(10), na.value = "grey") +
+        labs(title = paste0("Peristimulus Time Histogram - Odor", i, "Neurons"),
+             x = "Percentage of Offline Period Elapsed",
+             y = "Neurons Sorted by Median Time of Peak Activation",
+             fill = "Normalized Firing Rate") +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1),
+              axis.text.y = element_blank(),
+              axis.ticks.y = element_blank()) +
+        scale_x_continuous(breaks = seq(0, max(melted_data$time), by = 0.25))
+  print(p)
+}
+```
+

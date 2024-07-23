@@ -1,0 +1,104 @@
+---
+title: "prob_density"
+date: "2024-07-15"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+rm(list = ls())
+load("../RData/prediction_combined_all_rats_new2.RData")
+```
+
+```{r}
+plot_prob_density <- function(group_num, y_num) {
+  group_y_rows <- Barat |> filter(group == group_num & y == y_num)
+  
+  # If empty, return
+  if (nrow(group_y_rows) == 0) {
+    print(paste("No data for group", group_num, "and y", y_num))
+    return()
+  }
+  
+  print(paste("Graphing group", group_num, "and y", y_num))
+  
+  prediction_avgs <- data.frame(
+    time = c(),
+    p1 = c(),
+    p2 = c(),
+    p3 = c(),
+    p4 = c(),
+    p5 = c(),
+    p6 = c()
+  )
+  
+  for (i in unique(group_y_rows$seq_id)) {
+    seq_rows <- group_y_rows |> filter(seq_id == i)
+    start_time <- seq_rows$time[1]
+    
+    seq_rows <- seq_rows |> mutate(relative_time = time - start_time)
+    
+    prediction_avgs <- rbind(
+      prediction_avgs,
+      data.frame(
+        time = seq_rows$relative_time,
+        p1 = seq_rows$S1,
+        p2 = seq_rows$S2,
+        p3 = seq_rows$S3,
+        p4 = seq_rows$S4,
+        p5 = seq_rows$S5,
+        p6 = seq_rows$S6
+      )
+    )
+  }
+  
+  # Get the average p's for each time (combine rows with the same time)
+  prediction_avgs <- prediction_avgs |>
+    group_by(time) |>
+    mutate(across(p1:p6, median))
+  
+  # Plot the average p's for each time
+  # Use geom_smooth
+  ggplot(prediction_avgs, aes(x = time)) +
+    # geom_point(aes(y = p1), color = "#2ca8e0") +
+    # geom_point(aes(y = p2), color = "#9a857a") +
+    # geom_point(aes(y = p3), color = "#09a14a") +
+    # geom_point(aes(y = p4), color = "#804297") +
+    # geom_point(aes(y = p5), color = "#f16925") +
+    geom_smooth(aes(y = p1), se = FALSE, color = "#2ca8e0") +
+    geom_smooth(aes(y = p2), se = FALSE, color = "#9a857a") +
+    geom_smooth(aes(y = p3), se = FALSE, color = "#09a14a") +
+    geom_smooth(aes(y = p4), se = FALSE, color = "#804297") +
+    geom_smooth(aes(y = p5), se = FALSE, color = "#f16925") +
+    # # Make max y value 0.4
+    # scale_y_continuous(limits = c(0, 1)) +
+    labs(
+      title = paste(
+        "Median probability densities of predicted odors for group",
+        paste0(group_num, ","),
+        "offline interval",
+        # Replace offline interval number with A-B for 1, B-c for 2,
+        # C-D for 3, D-E for 4
+        (
+          if (y_num == 1) "A-B"
+          else if (y_num == 2) "B-C"
+          else if (y_num == 3) "C-D"
+          else "D-E"
+        )
+      ),
+      x = "Time (s)",
+      y = "Probability"
+    )
+}
+```
+
+```{r}
+for (i in 1:3) {
+  for (j in 1:4) {
+    print(plot_prob_density(i, j))
+  }
+}
+```

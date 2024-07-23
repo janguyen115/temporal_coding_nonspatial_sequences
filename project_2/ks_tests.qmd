@@ -1,0 +1,112 @@
+---
+title: "Project_4_KS_Test"
+output: html_document
+date: "2024-07-18"
+---
+```{r}
+load("../RData/prediction_combined_all_rats_new2.RData")
+```
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+# Function to process group data and compute average predictions
+compute_prediction_avgs <- function(group_data) {
+  prediction_avgs <- data.frame(
+    time = c(),
+    p1 = c(),
+    p2 = c(),
+    p3 = c(),
+    p4 = c(),
+    p5 = c(),
+    p6 = c()
+  )
+  
+  for (i in unique(group_data$seq_id)) {
+    seq_rows <- group_data |> filter(seq_id == i)
+    start_time <- seq_rows$time[1]
+    
+    seq_rows <- seq_rows |> mutate(relative_time = time - start_time)
+    
+    prediction_avgs <- rbind(
+      prediction_avgs,
+      data.frame(
+        time = seq_rows$relative_time,
+        p1 = seq_rows$S1,
+        p2 = seq_rows$S2,
+        p3 = seq_rows$S3,
+        p4 = seq_rows$S4,
+        p5 = seq_rows$S5,
+        p6 = seq_rows$S6
+      )
+    )
+  }
+  
+  prediction_avgs <- prediction_avgs |>
+    group_by(time) |>
+    summarize(across(p1:p6, median, na.rm = TRUE), .groups = "drop")
+}
+```
+
+```{r}
+ks_test_and_plots <- function(first_group, second_group, y) {
+  # Filter data for first group and interval
+  prediction_avgs <- compute_prediction_avgs(
+    Barat |> filter(group == first_group & y == y)
+  )
+  
+  # Filter data for second group and interval
+  prediction_avgs_2 <- compute_prediction_avgs(
+    Barat |> filter(group == second_group & y == y)
+  )
+  
+  # Perform Kolmogorov-Smirnov tests and plot ECDFs
+  ks_results <- list()
+  plots <- list()
+
+  for (i in 1:5) {
+    p_col <- paste0("p", i)
+    ks_results[[p_col]] <- ks.test(
+      prediction_avgs[[p_col]],
+      prediction_avgs_2[[p_col]]
+    )
+    
+    # Create ECDF plots
+    plot_data <- data.frame(
+      value = c(prediction_avgs[[p_col]], prediction_avgs_out[[p_col]]),
+      group = rep(
+        c(paste("Group", first_group), paste("Group", second_group)),
+        c(nrow(prediction_avgs), nrow(prediction_avgs_out))
+      )
+    )
+    
+    plot <- ggplot(plot_data, aes(x = value, color = group)) +
+      stat_ecdf(geom = "step") +
+      labs(
+        title = paste("ECDF of", p_col),
+        x = "Value",
+        y = "ECDF"
+      )
+    
+    plots[[p_col]] <- plot
+  }
+  
+  # Print KS test results
+  print(ks_results)
+  
+  # Display the plots
+  print(plots)
+}
+```
+
+```{r}
+# Group 1 vs Group 3, interval 4
+ks_test_and_plots(1, 3, 4)
+```
+
+```{r}
+# Group 1 vs Group 2, interval 4
+ks_test_and_plots(1, 2, 4)
+```
