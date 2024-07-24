@@ -16,6 +16,7 @@ load("../Rdata/TimeLag_EnsembleMat_predictions.RData")
 ```
 
 ```{r}
+### ODOR CELLS BASED ON MEAN STANDARDIZED FIRING RATE, NORMALIZED BY BASELINE FIRING RATE
 rats <- c("Barat", "Buchanan", "Mitt", "Stella", "SuperChris")
 odor_cells_list <- list()
 get_baseline <- function (null_period) {
@@ -117,6 +118,7 @@ get_baseline <- function (null_period) {
 
 ```{r}
 rats <- c("Barat", "Buchanan", "Mitt", "Stella", "SuperChris")
+numbins <- 50
 data <- data.frame()
 for (rat in rats) {
   trials_list <- list()
@@ -132,12 +134,12 @@ for (rat in rats) {
   for (id in odor_ids_list[[1]]) {
     trial <- timelag_data[timelag_data[["trial_id"]] == id,]
     if (nrow(trial) > 0) {
-      normalized_values <- normalize_time_window(trial, id, 50) # Normalize to [o,1.25] interval, 1000 rows per trial
+      normalized_values <- normalize_time_window(trial, id, numbins) # Normalize to [o,1.25] interval, 1000 rows per trial
       combined_trials <- combined_trials + normalized_values # Sum i^th row of each eligible trial
     }
   }
   # Create the new dataframe with interpolated values
-  interpolated_data <- data.frame(time = seq(0, 1, length.out = 50), combined_trials)
+  interpolated_data <- data.frame(time = seq(0, 1, length.out = numbins), combined_trials)
   colnames(interpolated_data)[-1] <- colnames(timelag_data)[6:ncol(timelag_data)]
   if (nrow(data) > 0) {
     data <- cbind(data, interpolated_data[,-1])
@@ -390,7 +392,7 @@ for (rat in rats) {
 }
 ```
 ```{r}
-# Function to get top neurons per odor
+# SORTING ODOR CELLS BY GLMM FOR PLOTS SEPERATED BY ODOR
 get_top_neurons_per_odor <- function(f1_scores_list, odor_labels, top_n = 20) {
   top_neurons_per_odor <- list()
   
