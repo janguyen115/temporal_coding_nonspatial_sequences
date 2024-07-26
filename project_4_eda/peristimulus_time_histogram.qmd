@@ -393,7 +393,7 @@ for (rat in rats) {
 ```
 ```{r}
 # SORTING ODOR CELLS BY GLMM FOR PLOTS SEPERATED BY ODOR
-get_top_neurons_per_odor <- function(f1_scores_list, odor_labels, top_n = 20) {
+get_top_neurons_per_odor <- function(f1_scores_list, odor_labels, top_n = 12) {
   top_neurons_per_odor <- list()
   
   for (odor in unique(odor_labels)) {
@@ -416,12 +416,6 @@ odor_labels <- unlist(lapply(rats, function(rat) {
   rep(c("Odor1", "Odor2", "Odor3", "Odor4", "Odor5"), length.out = length(neuron_f1_scores[[rat]]))
 }))
 
-update_names <- function(names_list, suffix) {
-  # Remove the prefix and append the suffix
-  updated_names <- gsub("^[^.]+\\.", "", names_list)
-  updated_names <- paste0(updated_names, ".", suffix)
-  return(updated_names)
-}
 # Function to update names
 update_names <- function(names_list, suffix) {
   # Append the suffix to the names
@@ -441,7 +435,7 @@ combined_f1_scores <- do.call(c, updated_neuron_f1_scores)
 top_neurons_per_odor <- get_top_neurons_per_odor(combined_f1_scores, odor_labels)
 
 for (odor in names(top_neurons_per_odor)) {
-  print(paste("Top 20 neurons for", odor, ":"))
+  print(paste("Top 12 neurons for", odor, ":"))
   print(top_neurons_per_odor[[odor]])
 }
 
@@ -456,8 +450,6 @@ for (odor in names(top_neurons_per_odor)) {
 library(ggplot2)
 library(dplyr)
 library(tidyr)
-
-
 
 for (i in 1:5) {
   neurons <- unlist(top_neurons_per_odor[[paste0("Odor",i)]]$neuron)
@@ -481,4 +473,67 @@ for (i in 1:5) {
   print(p)
 }
 ```
+```{r}
+rats <- c("Barat", "Buchanan", "Mitt", "Stella", "SuperChris")
+data <- data.frame()
+numbins <- 200
+for (i in 1:5) {
+  trials_list <- list()
+  behav_data <- be_data_clean[[rats[i]]]
+  timelag_data <- TimeLag_EnsembleMat[[rats[i]]]$test_data 
+  odor_ids_list <- get_odor_ids_list(rats[i], behav_data)  # corrected argument to rats[i]
+  combined_trials <- matrix(0, nrow = numbins, ncol = ncol(timelag_data) - 5) 
+  
+  rat_data <- TimeLag_EnsembleMat_predicted[[rats[i]]]$train_data
+  null_period <- rat_data[rat_data$y == 6,]
+  baseline <- get_baseline(null_period)
+  # Loop through each trial_id in odor_ids_list and sum the normalized values
+  for (id in odor_ids_list[[1]]) {
+    trial <- timelag_data[timelag_data[["trial_id"]] == id,]
+    if (nrow(trial) > 0) {
+      normalized_values <- normalize_time_window(trial, id, numbins) # Normalize to [0,1.25] interval, 1000 rows per trial
+      combined_trials <- combined_trials + normalized_values # Sum i^th row of each eligible trial
+    }
+  }
+  # Create the new dataframe with interpolated values
+  interpolated_data <- data.frame(time = seq(0, 1, length.out = numbins), combined_trials)
+  
+  # Function to update names
+  update_names <- function(names_list, suffix) {
+    # Append the suffix to the names
+    updated_names <- paste0(names_list, ".", suffix)
+    return(updated_names)
+  }
+  
+  # Update the column names of interpolated_data
+  colnames(interpolated_data)[-1] <- update_names(colnames(timelag_data)[6:ncol(timelag_data)], i)
+  
+  if (nrow(data) > 0) {
+    data <- cbind(data, interpolated_data[,-1])
+  } else {
+    data <- interpolated_data
+  }
+}
+
+odor_data <- data.frame(time = seq(0, 1, length.out = nrow(data)))
+for (i in 1:5) {
+  odor_data[[paste0("Odor", i)]] <- scale(rowMeans(data[, top_neurons_per_odor[[paste0("Odor",i)]]$neuron, drop = FALSE]))
+}
+
+# Melt the dataframe for ggplot
+melted_odor_data <- pivot_longer(odor_data, cols = -time, names_to = "Odor", values_to = "AverageActivity")
+
+# Plot the data
+ggplot(melted_odor_data, aes(x = time, y = AverageActivity, color = Odor)) +
+  geom_line(alpha = 0.1) +  # Adding a base line with transparency for reference
+  geom_smooth(se = FALSE, method = "loess", span = 0.2) +  # Adding smoothed lines
+  labs(title = "Smoothed Standardized Average Activity of Neurons for Each Odor",
+       x = "Percentage of Offline Period Elapsed",
+       y = "Standardized Average Activity",
+       color = "Odor") +
+  theme_minimal()
+```
+
+
+
 
